@@ -1,0 +1,114 @@
+CREATE OR REPLACE FUNCTION getColumnTypes()
+RETURNS TEXT[] AS $$
+DECLARE
+  columnTypes TEXT[];
+BEGIN
+  SELECT array_agg(data_type ORDER BY ordinal_position) INTO columnTypes
+  FROM information_schema.columns
+  WHERE table_name = 'my_table'
+  GROUP BY table_name;
+
+  RETURN columnTypes;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION getId(field_name text, field_value text)
+RETURNS integer[] AS $$
+DECLARE
+  id_value integer[];
+  is_integer_column boolean;
+BEGIN
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'my_table'
+      AND column_name = field_name
+      AND data_type = 'integer'
+  ) INTO is_integer_column;
+
+  IF is_integer_column THEN
+    EXECUTE format('SELECT array_agg(id) FROM my_table WHERE %I = %s', field_name, field_value::integer)
+    INTO id_value;
+  ELSE
+    EXECUTE format('SELECT array_agg(id) FROM my_table WHERE %I=%L', field_name, field_value)
+    INTO id_value;
+  END IF;
+
+  RETURN id_value;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION deleteByColumn(field_name text, field_value text)
+RETURNS VOID AS $$
+BEGIN
+  EXECUTE format('DELETE FROM my_table WHERE %I = %L', field_name, field_value);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION editValues(
+  new_values TEXT[],
+  id INTEGER
+) RETURNS VOID AS $$
+DECLARE
+  column_names TEXT;
+  query_text TEXT;
+BEGIN
+  SELECT string_agg(column_name, ', ' ORDER BY ordinal_position) INTO column_names FROM information_schema.columns WHERE table_name = 'my_table' GROUP BY table_name;
+  query_text := 'UPDATE my_table SET (' || column_names || ') = (' || array_to_string(new_values, ', ') || ') WHERE id = $1';
+  EXECUTE query_text USING id;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION insertValues(
+  new_values TEXT[]
+) RETURNS VOID AS $$
+DECLARE
+  query_text TEXT;
+BEGIN
+  query_text := 'INSERT INTO my_table VALUES(' || array_to_string(new_values, ', ') || ');';
+  EXECUTE query_text;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION createUserWithPermission(
+  username text, 
+  password text, 
+  permission text,
+  database_name text,
+  table_name text
+)
+RETURNS VOID AS $$
+BEGIN
+  EXECUTE format('CREATE USER %I WITH PASSWORD %L', username, password);
+
+  IF permission = 'guest' THEN
+    EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I;', database_name, username);
+    EXECUTE format('GRANT USAGE ON SCHEMA public TO %I;', username);
+    EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA public TO %I;', username);
+    EXECUTE format('GRANT SELECT ON %I TO %I;', table_name, username);
+    -- EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA public TO %I;', username);
+  ELSEIF permission = 'admin' THEN
+    EXECUTE format('ALTER USER %I WITH SUPERUSER;', username);
+    EXECUTE format('GRANT ALL ON ALL TABLES IN SCHEMA "public" TO %I;', username);
+    EXECUTE format('GRANT CREATE ON SCHEMA public TO %I;', username);
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION deleteUserByUsername(username text) RETURNS VOID AS $$
+BEGIN
+  -- Revoke privileges on database
+  EXECUTE format('ALTER USER %I NOSUPERUSER;', username);
+  EXECUTE format('REVOKE ALL PRIVILEGES ON DATABASE jdbc FROM %I;', username);
+
+  -- Revoke privileges on table
+  EXECUTE format('REVOKE ALL PRIVILEGES ON TABLE my_table FROM %I;', username);
+
+  -- Transfer ownership of table
+  EXECUTE format('REASSIGN owned BY %I to postgres;', username);
+  EXECUTE format('DROP OWNED BY %I;', username);
+--   EXECUTE format('ALTER TABLE my_table OWNER TO postgres;');
+
+  -- Drop user
+  EXECUTE format('DROP USER IF EXISTS %I;', username);
+END;
+$$ LANGUAGE plpgsql;

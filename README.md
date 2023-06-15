@@ -26,4 +26,6 @@ To use the Python application, you will need to have Python 3.6 or higher instal
 * PyQt5
 
 You can install these dependencies by running the following command in your terminal:
-`pip install -r DB_LAB3.2/requirements.txt`
+```
+pip install -r DB_LAB3.2/requirements.txt
+```
